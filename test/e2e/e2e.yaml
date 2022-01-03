@@ -19,11 +19,37 @@ setup:
   steps:
     - name: prepare e2e.yaml
       command: bash scripts/prepare-e2e.sh
+    #- name: build docker image
+    #  command: make docker -j 5
+            #kind load docker-image ${HUB}/gateway-service:${IMAGE_TAG}
+        #kind load docker-image ${HUB}/gateway-service:${IMAGE_TAG}-agentless
+        #kind load docker-image ${HUB}/songs-service:${IMAGE_TAG}
+        #kind load docker-image ${HUB}/songs-service:${IMAGE_TAG}-agentless
+        #kind load docker-image ${HUB}/recommendation-service:${IMAGE_TAG}
+        #kind load docker-image ${HUB}/recommendation-service:${IMAGE_TAG}-agentless
+        #kind load docker-image ${HUB}/app:${IMAGE_TAG}
+        #kind load docker-image ${HUB}/app:${IMAGE_TAG}-agentless
+        #kind load docker-image ${HUB}/load-gen:${IMAGE_TAG}
+        #kind load docker-image ${HUB}/load-gen:${TAG}-agentless
+        #        export IMAGE_TAG=${TAG}
+    - name: load docker image
+      command: |
+        echo ${IMAGE_HUB}
+        echo ${IMAGE_TAG}
     - name: setup showcase
       command: |
         export KUBECONFIG=$TMPDIR/e2e-k8s.config
-        export PATH="$PATH:/tmp/skywalking-infra-e2e/istio-1.12.1/bin"
+        export PATH="$PATH:/tmp/skywalking-infra-e2e/istio-1.9.1/bin"
+        # the kind has only one node
+        sed -i 's/cluster/single-node/' deploy/platform/kubernetes/Makefile.in
+        sed -i 's/1000m/500m/' deploy/platform/kubernetes/feature-single-node/resources.yaml 
+        cat deploy/platform/kubernetes/Makefile.in
         make deploy.kubernetes
+        #sleep 1
+        kubectl get po -A
+        kubectl describe po -lapp=oap
+        kubectl logs -f deployment/oap-deployment --all-containers=true -n default
+        kubectl logs -f deployment/es-deployment --all-containers=true -n default
       wait:
         - namespace: skywalking-swck-system
           resource: pod
@@ -37,7 +63,23 @@ setup:
         - namespace: istio-system
           resource: pod
           for: condition=Ready
+    - name: watch
+      command: |
+          kubectl get po -A
+          kubectl describe po -lapp=oap
+          kubectl logs -f deployment/oap-deployment --all-containers=true -n default
   kind:
+    import-images:
+      - ${IMAGE_HUB}/gateway-service:${IMAGE_TAG}
+      - ${IMAGE_HUB}/gateway-service:${IMAGE_TAG}-agentless
+      - ${IMAGE_HUB}/songs-service:${IMAGE_TAG}
+      - ${IMAGE_HUB}/songs-service:${IMAGE_TAG}-agentless
+      - ${IMAGE_HUB}/recommendation-service:${IMAGE_TAG}
+      - ${IMAGE_HUB}/recommendation-service:${IMAGE_TAG}-agentless
+      - ${IMAGE_HUB}/app:${IMAGE_TAG}
+      - ${IMAGE_HUB}/app:${IMAGE_TAG}-agentless
+      - ${IMAGE_HUB}/load-gen:${IMAGE_TAG}
+      - ${IMAGE_HUB}/load-gen:${IMAGE_TAG}-agentless
     expose-ports:
       - namespace: default
         resource: service/rocket-bot 
@@ -54,3 +96,15 @@ trigger:
   times: 5
   url: http://${service_rocket_bot_host}:${service_rocket_bot_8080}
   method: GET
+
+verify:
+  # verify with retry strategy
+  retry:
+    # max retry count
+    count: 10
+    # the interval between two attempts, e.g. 10s, 1m.
+    interval: 10s
+  cases:
+    # test service
+    - query: swctl --display yaml --base-url=http://${service_rocket_bot_host}:${service_rocket_bot_8080}/graphql service ls
+      expected: ./verify/service.yaml
